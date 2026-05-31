@@ -5,20 +5,20 @@
 # =============================================================================
 services:
   api:
-    image: ghcr.io/${GHCR_OWNER}/pgea-api:${TAG:-latest}
+    image: ghcr.io/${GHCR_OWNER}/proyecto_dis_software-api:${TAG:-latest}
     build: !reset null
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'
     environment:
       ENV: prod
 
   worker:
-    image: ghcr.io/${GHCR_OWNER}/pgea-api:${TAG:-latest}
+    image: ghcr.io/${GHCR_OWNER}/proyecto_dis_software-api:${TAG:-latest}
     build: !reset null
     environment:
       ENV: prod
 
   frontend:
-    image: ghcr.io/${GHCR_OWNER}/pgea-frontend:${TAG:-latest}
+    image: ghcr.io/${GHCR_OWNER}/proyecto_dis_software-frontend:${TAG:-latest}
     build: !reset null
     # TLS 1.2+ terminado por Nginx con certificados Let's Encrypt (certbot).
     volumes:
