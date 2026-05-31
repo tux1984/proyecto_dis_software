@@ -30,10 +30,11 @@ jobs:
             cd /opt/pgea
             git fetch origin main && git checkout main && git reset --hard origin/main
             export TAG=sha-${{ github.sha }}
-            docker compose -f docker-compose.yml -f infra/compose/docker-compose.prod.yml pull
-            docker compose -f docker-compose.yml -f infra/compose/docker-compose.prod.yml up -d
-            docker compose exec -T api alembic upgrade head
+            docker-compose -f docker-compose.yml -f infra/compose/docker-compose.prod.yml pull
+            docker-compose -f docker-compose.yml -f infra/compose/docker-compose.prod.yml up -d
+            docker-compose exec -T api alembic upgrade head
             for i in $(seq 1 20); do
-              curl -sf https://localhost/api/health/ready -k && break || sleep 3
+              curl -sf http://localhost:8080/api/health/ready && break || sleep 3
             done
-            docker compose exec -T postgres pg_dump -U pgea_app_user pgea > /opt/pgea/backups/post-deploy-$(date +%Y%m%d%H%M).sql
+            mkdir -p /opt/pgea/backups
+            docker-compose exec -T postgres pg_dump -U pgea_app_user pgea > /opt/pgea/backups/post-deploy-$(date +%Y%m%d%H%M).sql
