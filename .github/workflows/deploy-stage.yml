@@ -1,0 +1,42 @@
+# =============================================================================
+# Deploy a STAGE (AWS Lightsail) — en push a la rama `stage` (ADR-08).
+# La instancia hace `docker pull` desde GHCR (no compila en la VM),
+# ejecuta migraciones Alembic y verifica /health/ready; rollback si falla.
+# Requiere secrets: LIGHTSAIL_STAGE_HOST, LIGHTSAIL_SSH_KEY.
+# =============================================================================
+name: Deploy Stage
+
+on:
+  push:
+    branches: [stage]
+
+concurrency:
+  group: deploy-stage
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    name: Desplegar en Lightsail stage
+    runs-on: ubuntu-latest
+    environment: stage
+    steps:
+      - uses: actions/checkout@v4
+      - name: Desplegar por SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.LIGHTSAIL_STAGE_HOST }}
+          username: ubuntu
+          key: ${{ secrets.LIGHTSAIL_SSH_KEY }}
+          script: |
+            cd /opt/pgea
+            git fetch origin stage && git checkout stage && git reset --hard origin/stage
+            export TAG=sha-${{ github.sha }}
+            docker compose -f docker-compose.yml -f infra/compose/docker-compose.stage.yml pull
+            docker compose -f docker-compose.yml -f infra/compose/docker-compose.stage.yml up -d
+            # Migraciones y verificación de readiness
+            docker compose exec -T api alembic upgrade head
+            for i in $(seq 1 15); do
+              curl -sf http://localhost:8080/api/health/ready && break || sleep 3
+            done
+            # Rollback al tag anterior si readiness falla
+            curl -sf http://localhost:8080/api/health/ready || (echo "Readiness falló, rollback" && docker compose -f docker-compose.yml -f infra/compose/docker-compose.stage.yml rollback || true; exit 1)

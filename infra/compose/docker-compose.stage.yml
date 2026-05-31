@@ -1,0 +1,24 @@
+# =============================================================================
+# Override de STAGE (AWS Lightsail, rama `stage`). ADR-08.
+# Usa imágenes prebuilt de GHCR (la VM solo hace `docker pull`, no compila).
+# Variables esperadas en el .env de la VM: GHCR_OWNER, TAG.
+# =============================================================================
+services:
+  api:
+    image: ghcr.io/${GHCR_OWNER}/pgea-api:${TAG:-stage}
+    build: !reset null          # en la VM no se construye
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'
+    environment:
+      ENV: stage
+
+  worker:
+    image: ghcr.io/${GHCR_OWNER}/pgea-api:${TAG:-stage}
+    build: !reset null
+    environment:
+      ENV: stage
+
+  frontend:
+    image: ghcr.io/${GHCR_OWNER}/pgea-frontend:${TAG:-stage}
+    build: !reset null
+    ports:
+      - "8080:80"

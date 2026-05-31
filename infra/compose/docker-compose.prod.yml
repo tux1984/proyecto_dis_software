@@ -1,0 +1,33 @@
+# =============================================================================
+# Override de PRODUCCIÓN (AWS Lightsail, rama `main`). ADR-08, RNF-11.
+# Imágenes :latest de GHCR; Nginx termina TLS (Let's Encrypt vía certbot).
+# Variables esperadas en el .env de la VM: GHCR_OWNER, TAG.
+# =============================================================================
+services:
+  api:
+    image: ghcr.io/${GHCR_OWNER}/pgea-api:${TAG:-latest}
+    build: !reset null
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'
+    environment:
+      ENV: prod
+
+  worker:
+    image: ghcr.io/${GHCR_OWNER}/pgea-api:${TAG:-latest}
+    build: !reset null
+    environment:
+      ENV: prod
+
+  frontend:
+    image: ghcr.io/${GHCR_OWNER}/pgea-frontend:${TAG:-latest}
+    build: !reset null
+    # TLS 1.2+ terminado por Nginx con certificados Let's Encrypt (certbot).
+    volumes:
+      - ./infra/nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    ports:
+      - "80:80"
+      - "443:443"
+
+  # En producción Grafana no se expone públicamente (acceso vía túnel SSH).
+  grafana:
+    ports: !reset []

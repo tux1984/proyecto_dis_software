@@ -1,0 +1,155 @@
+# =============================================================================
+# PGEA — Stack completo (base). Monolito modular + observabilidad.
+# Vista física del SAD (Figura 18): Nginx → SPA + /api; API y Worker comparten
+# imagen; PostgreSQL+pgvector; observabilidad Prometheus + Grafana + Loki + Tempo.
+#   make up    levanta todo;   make down detiene;   make clean borra volúmenes
+# =============================================================================
+
+x-api-build: &api-build
+  build:
+    context: ./backend
+    dockerfile: Dockerfile
+  image: pgea-api:local
+  env_file: .env
+  restart: always               # ADR-08: recuperación ante fallo de contenedor
+
+services:
+  # ---------------------------------------------------------------------------
+  # Datos — PostgreSQL 16 con extensión pgvector (ADR-05, ADR-07)
+  # ---------------------------------------------------------------------------
+  postgres:
+    image: pgvector/pgvector:pg16
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-pgea_app_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_local_env}
+      POSTGRES_DB: ${POSTGRES_DB:-pgea}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-pgea_app_user} -d ${POSTGRES_DB:-pgea}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [pgea]
+
+  # ---------------------------------------------------------------------------
+  # API Backend — FastAPI + Uvicorn (ADR-01, ADR-02). Migra y arranca.
+  # ---------------------------------------------------------------------------
+  api:
+    <<: *api-build
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'"
+    # Volumen compartido con el worker: los PDFs de certificados que genera el
+    # worker deben ser servibles por el API (mismo /app/storage).
+    volumes:
+      - certstorage:/app/storage
+    depends_on:
+      postgres: {condition: service_healthy}
+      loki: {condition: service_started}
+      tempo: {condition: service_started}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/health/live').status==200 else 1)\""]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 30s
+    networks: [pgea]
+
+  # ---------------------------------------------------------------------------
+  # Worker async — misma imagen, consume cola queued_jobs (ADR-09, Producer/Consumer)
+  # ---------------------------------------------------------------------------
+  worker:
+    <<: *api-build
+    command: python -m app.worker
+    volumes:
+      - certstorage:/app/storage   # comparte los PDFs generados con el API
+    depends_on:
+      postgres: {condition: service_healthy}
+      api: {condition: service_started}
+    networks: [pgea]
+
+  # ---------------------------------------------------------------------------
+  # Frontend — Nginx sirve la SPA Vue y reverse-proxy a /api (Figura 18)
+  # Único punto de entrada público (TLS en prod vía override).
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-/api}
+    image: pgea-frontend:local
+    restart: always
+    depends_on:
+      api: {condition: service_started}
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    ports:
+      - "8080:80"
+    networks: [pgea]
+
+  # ---------------------------------------------------------------------------
+  # Observabilidad (ADR-04). Eje central del proyecto.
+  # ---------------------------------------------------------------------------
+  prometheus:
+    image: prom/prometheus:v2.53.0
+    restart: always
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+      - --web.enable-remote-write-receiver   # recibe span-metrics de Tempo
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./infra/prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - promdata:/prometheus
+    networks: [pgea]
+
+  loki:
+    image: grafana/loki:3.1.0
+    restart: always
+    command: -config.file=/etc/loki/loki-config.yml
+    volumes:
+      - ./infra/loki/loki-config.yml:/etc/loki/loki-config.yml:ro
+      - lokidata:/loki
+    networks: [pgea]
+
+  tempo:
+    image: grafana/tempo:2.5.0
+    restart: always
+    command: -config.file=/etc/tempo/tempo.yml
+    volumes:
+      - ./infra/tempo/tempo.yml:/etc/tempo/tempo.yml:ro
+      - tempodata:/var/tempo
+    networks: [pgea]
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    restart: always
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_FEATURE_TOGGLES_ENABLE: traceqlEditor
+    volumes:
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafanadata:/var/lib/grafana
+    ports:
+      - "3000:3000"
+    depends_on: [prometheus, loki, tempo]
+    networks: [pgea]
+
+networks:
+  pgea:
+    driver: bridge
+
+volumes:
+  pgdata:
+  promdata:
+  lokidata:
+  tempodata:
+  grafanadata:
+  certstorage:        # PDFs de certificados, compartido entre api y worker

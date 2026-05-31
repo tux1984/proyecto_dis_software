@@ -1,0 +1,45 @@
+# =============================================================================
+# Stack de pruebas. `make test` levanta una BD efímera y corre la suite pytest.
+# Embeddings en modo 'fake' (determinista) para no depender de la API de OpenAI.
+# =============================================================================
+services:
+  postgres-test:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: pgea_app_user
+      POSTGRES_PASSWORD: test
+      POSTGRES_DB: pgea_test
+    tmpfs:
+      - /var/lib/postgresql/data    # BD en memoria: rápida y desechable
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pgea_app_user -d pgea_test"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+    networks: [pgea]
+
+  api-test:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: pgea-api:local
+    command: ["sh", "-c", "alembic upgrade head && pytest -v --cov=app --cov-report=term-missing --cov-fail-under=70"]
+    environment:
+      ENV: test
+      DATABASE_URL: postgresql+asyncpg://pgea_app_user:test@postgres-test:5432/pgea_test
+      JWT_SECRET: test-secret-not-for-production
+      EMAIL_PROVIDER: mock
+      EMBEDDING_PROVIDER: fake
+      OAUTH_PROVIDER: mock
+      PAYMENT_PROVIDER: mock
+      OTEL_ENABLED: "false"
+      LOKI_ENDPOINT: ""
+    depends_on:
+      postgres-test: {condition: service_healthy}
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/alembic:/app/alembic
+      - ./backend/scripts:/app/scripts
+      - ./backend/tests:/app/tests
+      - ./backend/pyproject.toml:/app/pyproject.toml:ro   # config de coverage
+    networks: [pgea]

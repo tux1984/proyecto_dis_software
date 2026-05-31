@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(docker --version)",
+      "Bash(docker compose *)",
+      "Bash(npm --version)",
+      "Bash(curl -s http://localhost:8000/health/ready)",
+      "Bash(curl -s http://localhost:8000/metrics)"
+    ]
+  }
+}

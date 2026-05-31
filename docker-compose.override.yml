@@ -1,0 +1,37 @@
+# =============================================================================
+# Override de desarrollo local (se aplica automáticamente con `docker compose`).
+# Expone puertos internos y habilita hot-reload del API.
+# =============================================================================
+services:
+  api:
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload"
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/alembic:/app/alembic
+      - ./backend/scripts:/app/scripts
+      - ./backend/tests:/app/tests
+    ports:
+      - "8000:8000"          # acceso directo al API en dev (Swagger en /docs)
+
+  worker:
+    volumes:
+      - ./backend/app:/app/app
+
+  postgres:
+    ports:
+      - "5432:5432"          # psql local
+
+  prometheus:
+    ports:
+      - "9090:9090"
+
+  loki:
+    ports:
+      - "3100:3100"
+
+  tempo:
+    ports:
+      - "3200:3200"          # Tempo HTTP query
+      - "4317:4317"          # OTLP gRPC

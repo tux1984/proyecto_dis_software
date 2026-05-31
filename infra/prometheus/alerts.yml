@@ -1,0 +1,46 @@
+# =============================================================================
+# Reglas de alerta sobre SLO (SAD §10.2). Visibles en Grafana / Alertmanager.
+# =============================================================================
+groups:
+  - name: pgea-slo
+    rules:
+      # error_rate > 1% durante 5 min
+      - alert: HighErrorRate
+        expr: |
+          sum(rate(http_requests_total{status=~"5.."}[5m]))
+            / sum(rate(http_requests_total[5m])) > 0.01
+        for: 5m
+        labels: {severity: critical}
+        annotations:
+          summary: "Tasa de errores 5xx > 1% (5m)"
+          description: "El API supera el presupuesto de error (SLO 5xx <= 0.5%)."
+
+      # p95 latencia del catálogo > 500ms (RNF-06)
+      - alert: CatalogLatencyHigh
+        expr: |
+          histogram_quantile(0.95,
+            sum(rate(http_request_duration_seconds_bucket{handler=~"/events.*"}[5m])) by (le)
+          ) > 0.5
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "p95 del catálogo > 500ms"
+          description: "Incumple SLO de rendimiento del catálogo (RNF-06)."
+
+      # Saturación de la cola de notificaciones (RN-08)
+      - alert: NotificationQueueSaturated
+        expr: enrollment_queue_size > 1000
+        for: 5m
+        labels: {severity: warning}
+        annotations:
+          summary: "Cola de jobs > 1000"
+          description: "Posible saturación; considerar más workers (ADR-09)."
+
+      # Fallos de webhook de pago
+      - alert: PaymentWebhookFailures
+        expr: increase(webhook_processed_total{result="failure"}[5m]) > 5
+        for: 0m
+        labels: {severity: warning}
+        annotations:
+          summary: "Fallos de webhook de pago > 5 (5m)"
+          description: "Revisar adaptador de pasarela y reconciliación."

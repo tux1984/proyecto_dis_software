@@ -1,0 +1,58 @@
+# =============================================================================
+# Datasources pre-provisionados (SAD §6.4.2): Prometheus + Loki + Tempo,
+# con correlación trace_id (Loki -> Tempo) y service graph (Tempo -> Prometheus).
+# =============================================================================
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 15s
+
+  - name: Loki
+    type: loki
+    uid: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      # Detecta trace_id en los logs JSON y enlaza a Tempo (un clic log -> traza)
+      derivedFields:
+        - name: trace_id
+          matcherType: label
+          matcherRegex: "trace_id"
+          datasourceUid: tempo
+          url: "$${__value.raw}"
+          urlDisplayLabel: "Ver traza en Tempo"
+        - name: trace_id_json
+          matcherRegex: '"trace_id":\s*"(\w+)"'
+          datasourceUid: tempo
+          url: "$${__value.raw}"
+          urlDisplayLabel: "Ver traza (JSON)"
+
+  - name: Tempo
+    type: tempo
+    uid: tempo
+    access: proxy
+    url: http://tempo:3200
+    jsonData:
+      # Desde una traza, salta a los logs correlacionados en Loki
+      tracesToLogsV2:
+        datasourceUid: loki
+        spanStartTimeShift: "-5m"
+        spanEndTimeShift: "5m"
+        filterByTraceID: true
+        tags: [{ key: "service.name", value: "service" }]
+      # Desde una traza, salta a las métricas RED
+      tracesToMetrics:
+        datasourceUid: prometheus
+        spanStartTimeShift: "-5m"
+        spanEndTimeShift: "5m"
+      serviceMap:
+        datasourceUid: prometheus
+      nodeGraph:
+        enabled: true

@@ -1,0 +1,112 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "schemaVersion": 39,
+  "title": "PGEA — RED + SLO + Observabilidad",
+  "uid": "pgea-red",
+  "tags": ["pgea", "RED", "observabilidad"],
+  "time": { "from": "now-30m", "to": "now" },
+  "refresh": "10s",
+  "templating": { "list": [] },
+  "panels": [
+    {
+      "type": "row", "title": "RED — Golden Signals", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }
+    },
+    {
+      "type": "timeseries", "title": "Rate — req/s por ruta",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "reqps" }, "overrides": [] },
+      "targets": [
+        { "expr": "sum(rate(http_requests_total[1m])) by (handler)", "legendFormat": "{{handler}}", "refId": "A" }
+      ]
+    },
+    {
+      "type": "timeseries", "title": "Duration — latencia p50 / p95 / p99 (global)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 1 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [
+        { "expr": "histogram_quantile(0.50, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p50", "refId": "A" },
+        { "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p95", "refId": "B" },
+        { "expr": "histogram_quantile(0.99, sum(rate(http_request_duration_seconds_bucket[5m])) by (le))", "legendFormat": "p99", "refId": "C" }
+      ]
+    },
+    {
+      "type": "row", "title": "SLO", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 9 }
+    },
+    {
+      "type": "stat", "title": "Catálogo p95 (SLO ≤ 500ms · RNF-06)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 10 },
+      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 0.5 } ] } }, "overrides": [] },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{handler=~\"/events.*\"}[5m])) by (le))", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat", "title": "Inscripción p95 (SLO ≤ 2s · RNF-07)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 10 },
+      "fieldConfig": { "defaults": { "unit": "s", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 2 } ] } }, "overrides": [] },
+      "targets": [
+        { "expr": "histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{handler=~\"/enrollments.*\"}[5m])) by (le))", "refId": "A" }
+      ]
+    },
+    {
+      "type": "stat", "title": "Tasa de errores 5xx (SLO ≤ 0.5%)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 10 },
+      "fieldConfig": { "defaults": { "unit": "percentunit", "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "red", "value": 0.005 } ] } }, "overrides": [] },
+      "targets": [
+        { "expr": "sum(rate(http_requests_total{status=~\"5..\"}[5m])) / clamp_min(sum(rate(http_requests_total[5m])), 1)", "refId": "A" }
+      ]
+    },
+    {
+      "type": "row", "title": "Negocio / Asíncrono", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 16 }
+    },
+    {
+      "type": "gauge", "title": "Cola de jobs (enrollment_queue_size)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 6, "x": 0, "y": 17 },
+      "fieldConfig": { "defaults": { "thresholds": { "mode": "absolute", "steps": [ { "color": "green", "value": null }, { "color": "orange", "value": 500 }, { "color": "red", "value": 1000 } ] } }, "overrides": [] },
+      "targets": [ { "expr": "enrollment_queue_size", "refId": "A" } ]
+    },
+    {
+      "type": "timeseries", "title": "Correos enviados (notification_sent_total)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 9, "x": 6, "y": 17 },
+      "targets": [ { "expr": "sum(rate(notification_sent_total[5m])) by (result, provider)", "legendFormat": "{{provider}}/{{result}}", "refId": "A" } ]
+    },
+    {
+      "type": "timeseries", "title": "Webhooks de pago (webhook_processed_total)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 9, "x": 15, "y": 17 },
+      "targets": [ { "expr": "sum(rate(webhook_processed_total[5m])) by (result)", "legendFormat": "{{result}}", "refId": "A" } ]
+    },
+    {
+      "type": "timeseries", "title": "Generación de embeddings p95 (s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [ { "expr": "histogram_quantile(0.95, sum(rate(embedding_generation_duration_seconds_bucket[5m])) by (le))", "refId": "A" } ]
+    },
+    {
+      "type": "timeseries", "title": "Generación de certificados p95 (s)",
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 24 },
+      "fieldConfig": { "defaults": { "unit": "s" }, "overrides": [] },
+      "targets": [ { "expr": "histogram_quantile(0.95, sum(rate(certificate_generation_duration_seconds_bucket[5m])) by (le))", "refId": "A" } ]
+    },
+    {
+      "type": "row", "title": "Logs (Loki) — correlación por trace_id", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 31 }
+    },
+    {
+      "type": "logs", "title": "Logs del API (service=pgea-api)",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "h": 10, "w": 24, "x": 0, "y": 32 },
+      "options": { "showTime": true, "wrapLogMessage": true, "dedupStrategy": "none", "enableLogDetails": true },
+      "targets": [ { "expr": "{service=\"pgea-api\"} | json", "refId": "A" } ]
+    }
+  ]
+}

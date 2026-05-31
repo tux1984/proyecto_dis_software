@@ -1,0 +1,110 @@
+[project]
+name = "pgea-backend"
+version = "1.0.0"
+description = "Plataforma de Gestión de Eventos Académicos — API (monolito modular, Clean Architecture)"
+requires-python = ">=3.12"
+
+# Versiones alineadas con el stack tecnológico del SAD (Tabla 22).
+dependencies = [
+    # --- Framework / servidor (ADR-02) ---
+    "fastapi==0.115.*",
+    "uvicorn[standard]==0.30.*",
+    "pydantic[email]==2.8.*",
+    "pydantic-settings==2.4.*",
+    # --- Persistencia (ADR-05) ---
+    "sqlalchemy[asyncio]==2.0.*",
+    "asyncpg==0.29.*",
+    "alembic==1.13.*",
+    "pgvector==0.3.*",
+    # --- Seguridad / Auth (ADR-06) ---
+    "python-jose[cryptography]==3.3.*",
+    # --- Cliente HTTP (adaptadores + tests) ---
+    "httpx==0.27.*",
+    # --- Embeddings (ADR-07) ---
+    "openai==1.40.*",
+    # --- Certificados PDF (RF-13) ---
+    "fpdf2==2.7.*",
+    # --- Observabilidad (ADR-04) ---
+    "python-json-logger==2.0.*",
+    "prometheus-client==0.20.*",
+    "prometheus-fastapi-instrumentator==7.0.*",
+    "opentelemetry-sdk==1.27.*",
+    "opentelemetry-exporter-otlp-proto-grpc==1.27.*",
+    "opentelemetry-instrumentation-fastapi==0.48b0",
+    "opentelemetry-instrumentation-asyncpg==0.48b0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest==8.3.*",
+    "pytest-asyncio==0.23.*",
+    "coverage[toml]==7.6.*",
+    "pytest-cov==5.0.*",
+    "ruff==0.5.*",
+    "mypy==1.11.*",
+    "locust==2.31.*",
+    "faker==26.*",
+]
+
+[tool.setuptools]
+packages = ["app"]
+
+# ---- Ruff (lint) ----
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "C4", "SIM"]
+ignore = ["B008"]   # FastAPI usa llamadas en defaults (Depends) — patrón válido
+
+# ---- mypy (type check) ----
+[tool.mypy]
+python_version = "3.12"
+warn_unused_ignores = true
+ignore_missing_imports = true
+plugins = []
+
+# La asignación a atributos de modelos ORM (m.campo = entidad.campo) genera
+# fricción conocida entre SQLAlchemy 2.0 (Mapped[...]) y mypy por la opcionalidad
+# de columnas nullable. Se relaja SOLO el código 'assignment' en la capa de
+# repositorios (no son bugs de lógica); el resto del backend se verifica estricto.
+[[tool.mypy.overrides]]
+module = ["app.infrastructure.repositories.*"]
+disable_error_code = ["assignment"]
+
+# ---- pytest ----
+# ---- coverage (RNF-17, ADR-11): >=70% en módulos críticos ----
+[tool.coverage.run]
+source = ["app"]
+branch = true
+omit = [
+    "app/worker.py",
+    "app/main.py",
+    "app/observability/otel.py",
+    "app/observability/logging_config.py",
+    "*/__init__.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "\\.\\.\\.",
+    "if TYPE_CHECKING:",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-ra"
+filterwarnings = [
+    "ignore::DeprecationWarning:pytest_asyncio.*",
+]
+markers = [
+    "unit: pruebas unitarias aisladas con mocks",
+    "integration: pruebas contra PostgreSQL real",
+    "contract: contrato mock vs real de un mismo Protocol",
+    "e2e: flujo completo contra el API levantado",
+]
