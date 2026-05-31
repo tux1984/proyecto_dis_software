@@ -8,6 +8,8 @@ services:
     image: ghcr.io/${GHCR_OWNER}/proyecto_dis_software-api:${TAG:-latest}
     build: !reset null
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --proxy-headers --forwarded-allow-ips='*'
+    ports:
+      - "8000:8000"
     environment:
       ENV: prod
 
