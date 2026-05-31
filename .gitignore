@@ -48,3 +48,5 @@ backend/storage/
 # ---- Locust load-test reports (generated; keep the folder) ----
 backend/tests/load/reports/*
 !backend/tests/load/reports/.gitkeep
+!backend/tests/load/reports/*.html
+!backend/tests/load/reports/*.csv

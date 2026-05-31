@@ -1,0 +1,2 @@
+Method,Name,Error,Occurrences
+POST,/enrollments/register,HTTPError('409 Client Error: Conflict for url: /enrollments/register'),1621
