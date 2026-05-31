@@ -20,13 +20,8 @@ services:
   frontend:
     image: ghcr.io/${GHCR_OWNER}/proyecto_dis_software-frontend:${TAG:-latest}
     build: !reset null
-    # TLS 1.2+ terminado por Nginx con certificados Let's Encrypt (certbot).
-    volumes:
-      - ./infra/nginx/nginx.prod.conf:/etc/nginx/nginx.conf:ro
-      - /etc/letsencrypt:/etc/letsencrypt:ro
     ports:
-      - "80:80"
-      - "443:443"
+      - "8080:80"
 
   # En producción Grafana no se expone públicamente (acceso vía túnel SSH).
   grafana:
