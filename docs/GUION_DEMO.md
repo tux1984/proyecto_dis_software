@@ -3,9 +3,46 @@
 Guía paso a paso para presentar la plataforma. Cada sección indica **qué hacer**, **qué resaltar** y a
 **qué requisito** del SRS/SAD corresponde, para que puedas demostrar cada punto cuando el profesor lo pida.
 
-**Accesos locales:** SPA → http://localhost:8080 · Grafana → http://localhost:3000 (admin/admin) · API/Swagger → http://localhost:8000/docs
-**Accesos AWS:** Stage → http://13.220.166.163:8080 · Prod → http://44.192.12.194:8080
-**Login (SSO mock = el correo completo):** `admin@javeriana.edu.co`, `organizador1@javeriana.edu.co`, `asistente1@javeriana.edu.co`, `ponente1@javeriana.edu.co`
+**Login (SSO mock = el correo completo):** `admin@javeriana.edu.co` · `organizador1@javeriana.edu.co` · `asistente1@javeriana.edu.co` · `ponente1@javeriana.edu.co`
+
+---
+
+## Accesos por ambiente
+
+### Local
+
+| Servicio | URL | Notas |
+|----------|-----|-------|
+| Frontend (SPA) | http://localhost:8080 | Nginx sirve la SPA y proxya `/api` |
+| API / Swagger | http://localhost:8000/docs | Contrato interactivo completo |
+| API / ReDoc | http://localhost:8000/redoc | Documentación navegable |
+| Grafana | http://localhost:3000 | admin/admin · dashboard *PGEA — RED + SLO* |
+| Prometheus | http://localhost:9090 | Métricas raw + alertas |
+| Tempo | http://localhost:3200 | Trazas (acceso recomendado vía Grafana → Explore) |
+| Health live | http://localhost:8080/api/health/live | Solo verifica que el proceso responde |
+| Health ready | http://localhost:8080/api/health/ready | Verifica BD + cola + adaptadores |
+
+### AWS — Stage (`13.220.166.163`)
+
+| Servicio | URL |
+|----------|-----|
+| Frontend (SPA) | http://13.220.166.163:8080 |
+| API / Swagger | http://13.220.166.163:8000/docs |
+| API / ReDoc | http://13.220.166.163:8000/redoc |
+| Health ready | http://13.220.166.163:8080/api/health/ready |
+| Grafana | http://13.220.166.163:3000 (admin/admin) |
+| Prometheus | http://13.220.166.163:9090 |
+
+### AWS — Prod (`44.192.12.194`)
+
+| Servicio | URL |
+|----------|-----|
+| Frontend (SPA) | http://44.192.12.194:8080 |
+| API / Swagger | http://44.192.12.194:8000/docs |
+| API / ReDoc | http://44.192.12.194:8000/redoc |
+| Health ready | http://44.192.12.194:8080/api/health/ready |
+| Grafana | Túnel SSH → `ssh -L 3000:localhost:3000 ubuntu@44.192.12.194 -i ~/.ssh/github_actions_key` → http://localhost:3000 |
+| Prometheus | Túnel SSH → `ssh -L 9090:localhost:9090 ubuntu@44.192.12.194 -i ~/.ssh/github_actions_key` → http://localhost:9090 |
 
 ---
 
@@ -447,6 +484,113 @@ curl http://44.192.12.194:8080/api/health/ready    # prod
 
 ---
 
+## 9. Queries útiles de Loki para la demo
+
+Copia y pega estas consultas en **Grafana → Explore → fuente: Loki**:
+
+```logql
+# Todos los logs del API en tiempo real
+{service="pgea-api"}
+
+# Solo errores (5xx)
+{service="pgea-api"} | json | level="error"
+
+# Solo warnings de reglas de negocio
+{service="pgea-api"} | json | level="warning"
+
+# Buscar por trace_id específico
+{service="pgea-api"} |= "<pega_aqui_el_trace_id>"
+
+# Requests lentos (más de 300ms)
+{service="pgea-api"} | json | duration_ms > 300
+
+# Solo inscripciones
+{service="pgea-api"} |= "/enrollments"
+
+# Solo búsquedas semánticas
+{service="pgea-api"} |= "/search" |= "semantic"
+
+# Accesos denegados (RBAC)
+{service="pgea-api"} |= "forbidden"
+
+# Inscripciones duplicadas
+{service="pgea-api"} |= "duplicate_registration"
+
+# Logs del worker (certificados, correos)
+{service="pgea-worker"}
+
+# Worker: solo generación de certificados
+{service="pgea-worker"} |= "certificate"
+```
+
+---
+
+## 10. Queries útiles de Prometheus para la demo
+
+Copia y pega en **Grafana → Explore → fuente: Prometheus** o en http://localhost:9090:
+
+```promql
+# Tasa de requests por ruta (último minuto)
+rate(http_requests_total[1m])
+
+# Solo errores 5xx
+rate(http_requests_total{status=~"5.."}[1m])
+
+# Latencia p95 por endpoint
+histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[1m]))
+
+# Inscripciones confirmadas acumuladas
+enrollment_confirmed_total
+
+# Tamaño de la cola del worker (jobs pendientes)
+enrollment_queue_size
+
+# Notificaciones enviadas
+notification_sent_total
+
+# Webhooks de pago procesados
+webhook_processed_total
+
+# Disponibilidad del API (uptime)
+up{job="pgea-api"}
+```
+
+---
+
+## 11. Preguntas frecuentes y cómo responderlas
+
+**¿Por qué monolito y no microservicios?**
+> ADR-01: equipo pequeño, tiempo acotado, sin overhead de red entre servicios. El monolito es *modular* — las fronteras existen en código aunque no en procesos. Escalar a microservicios requeriría extraer módulos, no reescribir.
+
+**¿Cómo garantizan que no hay sobreventa?**
+> `SELECT … FOR NO KEY UPDATE` en PostgreSQL — el lock es a nivel de fila, atómico con la inserción de la inscripción. Sin Redis, sin locks de aplicación. Demostrable con el test de concurrencia (§3.2).
+
+**¿Qué pasa si cae la base de datos?**
+> `/health/ready` devuelve 503 inmediatamente. `restart: always` recupera los contenedores. La cola de jobs persiste en PostgreSQL — cuando vuelve, el worker retoma desde donde quedó (§5.4).
+
+**¿Cómo se escala el sistema?**
+> API y Worker son stateless — se pueden agregar réplicas. La cola PostgreSQL con `SKIP LOCKED` garantiza que múltiples workers no procesan el mismo job. El único estado compartido es la BD.
+
+**¿Por qué pgvector y no Elasticsearch o Pinecone?**
+> ADR-07: evitar una dependencia externa adicional. PostgreSQL ya es el sistema de registro — agregar pgvector añade búsqueda vectorial sin nuevo servicio. Con `EMBEDDING_PROVIDER=openai` la calidad es comparable.
+
+**¿Cómo funciona el patrón Observer en las inscripciones?**
+> `EnrollmentService.register()` publica un evento de dominio. Los handlers suscritos reaccionan: `NotificationEnqueueHandler` encola el correo, `CapacityMetricHandler` actualiza la métrica, `AuditHandler` registra la acción. Agregar un nuevo efecto = agregar un handler, sin tocar el servicio.
+
+**¿Cómo demuestran la modificabilidad en vivo?**
+> Cambiar `EMAIL_PROVIDER=mock` a `EMAIL_PROVIDER=smtp` en `.env` y `docker compose up -d api worker` — el Factory Method crea el adaptador correcto. El servicio de notificaciones no cambia una línea (§3.6).
+
+**¿Qué garantiza la auditoría inmutable?**
+> Un trigger de PostgreSQL bloquea `UPDATE` y `DELETE` sobre `audit_log` — aplica incluso al usuario dueño de la BD, no solo a la aplicación. Demostrable en vivo con `DELETE FROM audit_log` → `ERROR 42501` (§3.4).
+
+**¿Cómo se correlacionan logs, métricas y trazas?**
+> Cada request genera un `trace_id` W3C. El middleware lo inyecta en el log JSON, en la cabecera `X-Trace-Id` de la respuesta, y en el span de OpenTelemetry. Con ese ID navegas de Loki a Tempo en un clic (§5.2, §8.1).
+
+**¿Cumplen los SLOs?**
+> Sí: catálogo p95 ≤ 500 ms a 50 VUs y inscripción p95 ≤ 2 s a 20 VUs. Los reportes HTML de Locust lo evidencian. A 200 VUs (4×) hay degradación elegante sin errores (§4).
+
+---
+
 ## Resumen de "qué prueba cada cosa" (para responder al profesor)
 
 | Demostración | Requisitos que evidencia |
@@ -463,4 +607,5 @@ curl http://44.192.12.194:8080/api/health/ready    # prod
 | Exportar calendario .ics (§3.7) | RF-08 |
 | Volumetría Locust — 4 escenarios (§4) | RNF-06/07/08/17/18 |
 | Observabilidad RED + trazas correlacionadas (§5) | RNF-01/02/03/04/05/09, RN-10, CU-06 |
-| CI/CD commit vacío end-to-end (§6) | ADR-08, ADR-11 |
+| Escenarios integración herramientas (§8) | RNF-01/02/03/04/05, CU-06 |
+| CI/CD commit vacío end-to-end (§6, §8.9) | ADR-08, ADR-11 |
