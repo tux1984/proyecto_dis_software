@@ -3,9 +3,39 @@
 Guía paso a paso para presentar la plataforma. Cada sección indica **qué hacer**, **qué resaltar** y a
 **qué requisito** del SRS/SAD corresponde, para que puedas demostrar cada punto cuando el profesor lo pida.
 
-**Accesos locales:** SPA → http://localhost:8080 · Grafana → http://localhost:3000 (admin/admin) · API/Swagger → http://localhost:8000/docs
-**Accesos AWS:** Stage → http://13.220.166.163:8080 · Prod → http://44.192.12.194:8080
 **Login (SSO mock = el correo completo):** `admin@javeriana.edu.co`, `organizador1@javeriana.edu.co`, `asistente1@javeriana.edu.co`, `ponente1@javeriana.edu.co`
+
+### Accesos locales
+
+| Servicio | URL |
+|----------|-----|
+| Frontend (SPA) | http://localhost:8080 |
+| API / Swagger | http://localhost:8000/docs |
+| API / ReDoc | http://localhost:8000/redoc |
+| Grafana | http://localhost:3000 (admin/admin) |
+| Prometheus | http://localhost:9090 |
+
+### Accesos AWS — Stage (`13.220.166.163`)
+
+| Servicio | URL |
+|----------|-----|
+| Frontend (SPA) | http://13.220.166.163:8080 |
+| API / Swagger | http://13.220.166.163:8000/docs |
+| API / ReDoc | http://13.220.166.163:8000/redoc |
+| Health check | http://13.220.166.163:8080/api/health/ready |
+| Grafana | http://13.220.166.163:3000 (admin/admin) |
+| Prometheus | http://13.220.166.163:9090 |
+
+### Accesos AWS — Prod (`44.192.12.194`)
+
+| Servicio | URL |
+|----------|-----|
+| Frontend (SPA) | http://44.192.12.194:8080 |
+| API / Swagger | http://44.192.12.194:8000/docs |
+| API / ReDoc | http://44.192.12.194:8000/redoc |
+| Health check | http://44.192.12.194:8080/api/health/ready |
+| Grafana | Solo por túnel SSH: `ssh -L 3000:localhost:3000 ubuntu@44.192.12.194 -i ~/.ssh/github_actions_key` → http://localhost:3000 |
+| Prometheus | Solo por túnel SSH: `ssh -L 9090:localhost:9090 ubuntu@44.192.12.194 -i ~/.ssh/github_actions_key` → http://localhost:9090 |
 
 ---
 
@@ -444,6 +474,192 @@ curl "http://localhost:8000/search?q=medicina&semantic=true"
 curl http://13.220.166.163:8080/api/health/ready   # stage
 curl http://44.192.12.194:8080/api/health/ready    # prod
 ```
+
+---
+
+## 8. Escenarios de integración entre herramientas — qué hacer y dónde mirarlo
+
+> Esta sección es el corazón de la demo: muestra que las herramientas no son independientes sino que se complementan. Cada acción en el frontend o la API se puede rastrear en logs, métricas y trazas.
+
+---
+
+### 8.1 Inscripción en la SPA → ver la traza completa en Grafana
+
+**Qué hacer:**
+1. Abre la SPA y loguéate como `asistente1@javeriana.edu.co`.
+2. Inscríbete en un evento gratuito.
+3. En DevTools → Network, copia la cabecera `X-Trace-Id` de la respuesta.
+
+**Qué mirar:**
+- **Loki** → Explore → `{service="pgea-api"} |= "<trace_id>"` → log JSON con `route`, `status_code`, `duration_ms`, `user_id`, `event_id`.
+- **Tempo** → haz clic en el `trace_id` dentro del log → traza con 3 spans: HTTP root, `enrollment.reserve_capacity`, queries asyncpg a PostgreSQL.
+- **Prometheus / Grafana dashboard** → panel `enrollment_confirmed_total` sube en 1 · panel `enrollment_queue_size` sube (certificado encolado) y luego baja cuando el worker lo procesa.
+
+> *"Una sola acción del usuario genera logs estructurados, una traza distribuida y métricas de negocio — todo correlacionado por el mismo `trace_id`."*
+
+---
+
+### 8.2 Inscripción duplicada → ver el WARNING en Loki y el 409 en Prometheus
+
+**Qué hacer:**
+1. Intenta inscribirte dos veces en el mismo evento (la segunda vez con el botón deshabilitado o directo por Swagger).
+2. En Swagger: `POST /enrollments/{event_id}/register` dos veces con el mismo token.
+
+**Qué mirar:**
+- **Loki** → `{service="pgea-api"} |= "duplicate_registration"` → log en nivel `WARNING` con la razón de negocio.
+- **Prometheus** → métrica `http_requests_total{status="409"}` incrementa.
+- **Grafana dashboard** → panel Errors muestra el spike de 409 (no es un error del sistema, es una regla de negocio).
+- **Tempo** → la traza muestra que el span `enrollment.reserve_capacity` terminó con excepción de negocio, no de infraestructura.
+
+> *"Los 409 no son bugs — son reglas de negocio. Loki los registra como WARNING, no ERROR, para no contaminar las alertas."*
+
+---
+
+### 8.3 Prueba de volumetría → ver Grafana en vivo
+
+**Qué hacer:**
+```bash
+make load   # catálogo 50 VUs + inscripción 20 VUs durante 1 min
+```
+
+**Qué mirar simultáneamente en Grafana:**
+- **Panel Rate** → sube a ~50-100 req/s en `GET /events`.
+- **Panel Duration p95** → se mantiene ≤ 500 ms para catálogo y ≤ 2 s para inscripción (SLO en verde).
+- **Panel Errors** → debe mantenerse en 0% (ningún 5xx).
+- **Panel `enrollment_queue_size`** → sube durante la carga (certificados encolados) y el worker los va procesando.
+- **Loki** → `{service="pgea-api"} | json | duration_ms > 300` → filtra solo requests lentos en tiempo real.
+
+> *"El sistema cumple el SLO bajo carga nominal. Ahora vamos a cuadruplicarla."*
+
+```bash
+make load-stress   # spike 200 VUs + stress mixto 100 VUs
+```
+- **Panel Rate** → sube bruscamente a 200+ req/s.
+- **Panel Duration** → p95 sube pero sin llegar a timeout.
+- **Panel Errors** → sigue en 0% — degradación elegante, no caída.
+
+---
+
+### 8.4 Caída de la BD → ver degradación en health check y Grafana
+
+**Qué hacer:**
+```bash
+docker compose stop postgres
+curl http://localhost:8080/api/health/ready
+```
+
+**Qué mirar:**
+- **Health check** → responde `{"status": "degraded", "checks": {"database": "error"}}` con HTTP 503.
+- **Grafana dashboard** → panel Errors sube (503 en `/health/ready`).
+- **Loki** → `{service="pgea-api"} | json | level="error"` → aparecen los errores de conexión a PostgreSQL con stack trace y `trace_id`.
+- **Prometheus** → alerta `DatabaseDown` se activa (si está configurada).
+
+```bash
+docker compose start postgres
+# En 10-15s vuelve a "ready"
+```
+- **Health check** → vuelve a `{"status": "ready"}`.
+- **Grafana** → los errores desaparecen, Rate vuelve a 0.
+
+> *"El sistema detecta la caída, la reporta en el health check y se recupera automáticamente — sin intervención manual (`restart: always`, ADR-08)."*
+
+---
+
+### 8.5 RBAC: acceso denegado → ver auditoría y log
+
+**Qué hacer:**
+1. Loguéate como `asistente1@javeriana.edu.co`.
+2. Intenta acceder a `/admin` en la SPA o directamente en Swagger: `GET /admin/dashboard` con el token del asistente.
+
+**Qué mirar:**
+- **Loki** → `{service="pgea-api"} |= "forbidden"` → log `WARNING` con `user_id`, `role=attendee`, `route=/admin/dashboard`.
+- **Prometheus** → `http_requests_total{status="403"}` incrementa.
+- **SPA como admin** → Administración → Auditoría → aparece la entrada `access_denied` con el `trace_id` del intento.
+- **Tempo** → la traza muestra que el request terminó en el middleware de RBAC antes de llegar al servicio de negocio.
+
+> *"El rechazo no solo devuelve 403 — queda auditado con actor, recurso y traza. Eso es lo que diferencia seguridad real de seguridad cosmética."*
+
+---
+
+### 8.6 Directamente en Swagger → ver efecto en Grafana y Loki
+
+**Qué hacer:**
+1. Abre http://localhost:8000/docs (o el de stage/prod).
+2. Autentícate con `POST /auth/login` → copia el `access_token`.
+3. Ejecuta `GET /events` varias veces seguidas.
+4. Ejecuta `GET /search?q=inteligencia+artificial&semantic=true`.
+5. Ejecuta `POST /enrollments/{event_id}/register`.
+
+**Qué mirar:**
+- **Grafana dashboard** → cada request en Swagger aparece en el panel Rate en tiempo real.
+- **Loki** → `{service="pgea-api"}` → cada llamada genera un log JSON con método, ruta, status y duración.
+- **Tempo** → cada request tiene su propia traza navegable.
+- **Prometheus** → `http_requests_total` y `http_request_duration_seconds` se actualizan por endpoint.
+
+> *"Swagger no es solo documentación — es una herramienta de prueba que alimenta el mismo pipeline de observabilidad que el frontend."*
+
+---
+
+### 8.7 Generación de certificado → ver el worker en acción
+
+**Qué hacer:**
+1. Completa el flujo: inscripción → asistencia → solicitar certificado.
+2. En otra terminal, corre `make logs` o:
+```bash
+docker compose logs -f worker
+```
+
+**Qué mirar:**
+- **Logs del worker** → aparece `INFO: Procesando job certificate_generation — enrollment_id=…` y luego `INFO: Certificado generado en Xms`.
+- **Loki** → `{service="pgea-worker"}` → los mismos logs estructurados del worker.
+- **Grafana** → panel `certificate_generated_total` sube en 1 · panel `enrollment_queue_size` baja (job procesado).
+- **Tempo** → la traza del `POST /certificates/request` muestra el span de encolado; el worker genera su propia traza con el span de generación del PDF.
+
+> *"El API responde inmediatamente al encolar. El worker procesa en segundo plano. Ambos son trazables por separado pero correlacionados por el `enrollment_id`."*
+
+---
+
+### 8.8 Búsqueda semántica → comparar con y sin semántica en Swagger
+
+**Qué hacer en Swagger (`/docs`):**
+```
+GET /search?q=ia&semantic=false   → 0 resultados (búsqueda textual exacta)
+GET /search?q=ia&semantic=true    → 4 resultados (mapa curado: IA, Deep Learning, NLP, pgvector)
+GET /search?q=medicina&semantic=true → eventos de Telemedicina y Bioética
+```
+
+**Qué mirar:**
+- **Loki** → `{service="pgea-api"} |= "/search"` → el log incluye `semantic=true`, `strategy=curated`, `results=4`.
+- **Grafana** → el panel Rate muestra los requests a `/search` diferenciados.
+- **Tempo** → la traza de búsqueda semántica tiene un span adicional `curated_search.match` que no aparece en la textual.
+
+> *"La diferencia entre búsqueda textual y semántica es visible no solo en los resultados sino en la traza — el span `curated_search.match` solo aparece cuando se activa la semántica."*
+
+---
+
+### 8.9 CI/CD en vivo → push y ver el deploy en GitHub Actions
+
+**Qué hacer:**
+```bash
+git checkout stage
+git commit --allow-empty -m "chore: demo CI/CD en vivo"
+git push origin stage
+```
+
+**Qué mirar:**
+- **GitHub Actions** → aparece el workflow CI corriendo: lint → tests → build → push a GHCR.
+- **GitHub Actions** → Deploy Stage empieza cuando CI termina: SSH → pull → up -d → migraciones → health check.
+- **Health check stage** → `curl http://13.220.166.163:8080/api/health/ready` → responde `ready` al finalizar el deploy.
+- **Grafana stage** → el panel muestra el restart del contenedor (breve caída de métricas y recuperación).
+
+Luego promueve a prod:
+```bash
+git checkout main && git merge stage --no-edit && git push origin main
+```
+- **Deploy Prod** → mismo flujo pero sobre `44.192.12.194`.
+- **Health check prod** → `curl http://44.192.12.194:8080/api/health/ready`.
+
+> *"El código pasa por lint, type-check, tests con ≥70% de cobertura y smoke test de Locust antes de llegar a producción. Todo automático desde un `git push`."*
 
 ---
 
