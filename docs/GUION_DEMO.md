@@ -3,39 +3,46 @@
 Guía paso a paso para presentar la plataforma. Cada sección indica **qué hacer**, **qué resaltar** y a
 **qué requisito** del SRS/SAD corresponde, para que puedas demostrar cada punto cuando el profesor lo pida.
 
-**Login (SSO mock = el correo completo):** `admin@javeriana.edu.co`, `organizador1@javeriana.edu.co`, `asistente1@javeriana.edu.co`, `ponente1@javeriana.edu.co`
+**Login (SSO mock = el correo completo):** `admin@javeriana.edu.co` · `organizador1@javeriana.edu.co` · `asistente1@javeriana.edu.co` · `ponente1@javeriana.edu.co`
 
-### Accesos locales
+---
 
-| Servicio | URL |
-|----------|-----|
-| Frontend (SPA) | http://localhost:8080 |
-| API / Swagger | http://localhost:8000/docs |
-| API / ReDoc | http://localhost:8000/redoc |
-| Grafana | http://localhost:3000 (admin/admin) |
-| Prometheus | http://localhost:9090 |
+## Accesos por ambiente
 
-### Accesos AWS — Stage (`13.220.166.163`)
+### Local
+
+| Servicio | URL | Notas |
+|----------|-----|-------|
+| Frontend (SPA) | http://localhost:8080 | Nginx sirve la SPA y proxya `/api` |
+| API / Swagger | http://localhost:8000/docs | Contrato interactivo completo |
+| API / ReDoc | http://localhost:8000/redoc | Documentación navegable |
+| Grafana | http://localhost:3000 | admin/admin · dashboard *PGEA — RED + SLO* |
+| Prometheus | http://localhost:9090 | Métricas raw + alertas |
+| Tempo | http://localhost:3200 | Trazas (acceso recomendado vía Grafana → Explore) |
+| Health live | http://localhost:8080/api/health/live | Solo verifica que el proceso responde |
+| Health ready | http://localhost:8080/api/health/ready | Verifica BD + cola + adaptadores |
+
+### AWS — Stage (`13.220.166.163`)
 
 | Servicio | URL |
 |----------|-----|
 | Frontend (SPA) | http://13.220.166.163:8080 |
 | API / Swagger | http://13.220.166.163:8000/docs |
 | API / ReDoc | http://13.220.166.163:8000/redoc |
-| Health check | http://13.220.166.163:8080/api/health/ready |
+| Health ready | http://13.220.166.163:8080/api/health/ready |
 | Grafana | http://13.220.166.163:3000 (admin/admin) |
 | Prometheus | http://13.220.166.163:9090 |
 
-### Accesos AWS — Prod (`44.192.12.194`)
+### AWS — Prod (`44.192.12.194`)
 
 | Servicio | URL |
 |----------|-----|
 | Frontend (SPA) | http://44.192.12.194:8080 |
 | API / Swagger | http://44.192.12.194:8000/docs |
 | API / ReDoc | http://44.192.12.194:8000/redoc |
-| Health check | http://44.192.12.194:8080/api/health/ready |
-| Grafana | Solo por túnel SSH: `ssh -L 3000:localhost:3000 ubuntu@44.192.12.194 -i ~/.ssh/github_actions_key` → http://localhost:3000 |
-| Prometheus | Solo por túnel SSH: `ssh -L 9090:localhost:9090 ubuntu@44.192.12.194 -i ~/.ssh/github_actions_key` → http://localhost:9090 |
+| Health ready | http://44.192.12.194:8080/api/health/ready |
+| Grafana | Túnel SSH → `ssh -L 3000:localhost:3000 ubuntu@44.192.12.194 -i ~/.ssh/github_actions_key` → http://localhost:3000 |
+| Prometheus | Túnel SSH → `ssh -L 9090:localhost:9090 ubuntu@44.192.12.194 -i ~/.ssh/github_actions_key` → http://localhost:9090 |
 
 ---
 
@@ -477,189 +484,110 @@ curl http://44.192.12.194:8080/api/health/ready    # prod
 
 ---
 
-## 8. Escenarios de integración entre herramientas — qué hacer y dónde mirarlo
+## 9. Queries útiles de Loki para la demo
 
-> Esta sección es el corazón de la demo: muestra que las herramientas no son independientes sino que se complementan. Cada acción en el frontend o la API se puede rastrear en logs, métricas y trazas.
+Copia y pega estas consultas en **Grafana → Explore → fuente: Loki**:
+
+```logql
+# Todos los logs del API en tiempo real
+{service="pgea-api"}
+
+# Solo errores (5xx)
+{service="pgea-api"} | json | level="error"
+
+# Solo warnings de reglas de negocio
+{service="pgea-api"} | json | level="warning"
+
+# Buscar por trace_id específico
+{service="pgea-api"} |= "<pega_aqui_el_trace_id>"
+
+# Requests lentos (más de 300ms)
+{service="pgea-api"} | json | duration_ms > 300
+
+# Solo inscripciones
+{service="pgea-api"} |= "/enrollments"
+
+# Solo búsquedas semánticas
+{service="pgea-api"} |= "/search" |= "semantic"
+
+# Accesos denegados (RBAC)
+{service="pgea-api"} |= "forbidden"
+
+# Inscripciones duplicadas
+{service="pgea-api"} |= "duplicate_registration"
+
+# Logs del worker (certificados, correos)
+{service="pgea-worker"}
+
+# Worker: solo generación de certificados
+{service="pgea-worker"} |= "certificate"
+```
 
 ---
 
-### 8.1 Inscripción en la SPA → ver la traza completa en Grafana
+## 10. Queries útiles de Prometheus para la demo
 
-**Qué hacer:**
-1. Abre la SPA y loguéate como `asistente1@javeriana.edu.co`.
-2. Inscríbete en un evento gratuito.
-3. En DevTools → Network, copia la cabecera `X-Trace-Id` de la respuesta.
+Copia y pega en **Grafana → Explore → fuente: Prometheus** o en http://localhost:9090:
 
-**Qué mirar:**
-- **Loki** → Explore → `{service="pgea-api"} |= "<trace_id>"` → log JSON con `route`, `status_code`, `duration_ms`, `user_id`, `event_id`.
-- **Tempo** → haz clic en el `trace_id` dentro del log → traza con 3 spans: HTTP root, `enrollment.reserve_capacity`, queries asyncpg a PostgreSQL.
-- **Prometheus / Grafana dashboard** → panel `enrollment_confirmed_total` sube en 1 · panel `enrollment_queue_size` sube (certificado encolado) y luego baja cuando el worker lo procesa.
+```promql
+# Tasa de requests por ruta (último minuto)
+rate(http_requests_total[1m])
 
-> *"Una sola acción del usuario genera logs estructurados, una traza distribuida y métricas de negocio — todo correlacionado por el mismo `trace_id`."*
+# Solo errores 5xx
+rate(http_requests_total{status=~"5.."}[1m])
+
+# Latencia p95 por endpoint
+histogram_quantile(0.95, rate(http_request_duration_seconds_bucket[1m]))
+
+# Inscripciones confirmadas acumuladas
+enrollment_confirmed_total
+
+# Tamaño de la cola del worker (jobs pendientes)
+enrollment_queue_size
+
+# Notificaciones enviadas
+notification_sent_total
+
+# Webhooks de pago procesados
+webhook_processed_total
+
+# Disponibilidad del API (uptime)
+up{job="pgea-api"}
+```
 
 ---
 
-### 8.2 Inscripción duplicada → ver el WARNING en Loki y el 409 en Prometheus
+## 11. Preguntas frecuentes y cómo responderlas
 
-**Qué hacer:**
-1. Intenta inscribirte dos veces en el mismo evento (la segunda vez con el botón deshabilitado o directo por Swagger).
-2. En Swagger: `POST /enrollments/{event_id}/register` dos veces con el mismo token.
+**¿Por qué monolito y no microservicios?**
+> ADR-01: equipo pequeño, tiempo acotado, sin overhead de red entre servicios. El monolito es *modular* — las fronteras existen en código aunque no en procesos. Escalar a microservicios requeriría extraer módulos, no reescribir.
 
-**Qué mirar:**
-- **Loki** → `{service="pgea-api"} |= "duplicate_registration"` → log en nivel `WARNING` con la razón de negocio.
-- **Prometheus** → métrica `http_requests_total{status="409"}` incrementa.
-- **Grafana dashboard** → panel Errors muestra el spike de 409 (no es un error del sistema, es una regla de negocio).
-- **Tempo** → la traza muestra que el span `enrollment.reserve_capacity` terminó con excepción de negocio, no de infraestructura.
+**¿Cómo garantizan que no hay sobreventa?**
+> `SELECT … FOR NO KEY UPDATE` en PostgreSQL — el lock es a nivel de fila, atómico con la inserción de la inscripción. Sin Redis, sin locks de aplicación. Demostrable con el test de concurrencia (§3.2).
 
-> *"Los 409 no son bugs — son reglas de negocio. Loki los registra como WARNING, no ERROR, para no contaminar las alertas."*
+**¿Qué pasa si cae la base de datos?**
+> `/health/ready` devuelve 503 inmediatamente. `restart: always` recupera los contenedores. La cola de jobs persiste en PostgreSQL — cuando vuelve, el worker retoma desde donde quedó (§5.4).
 
----
+**¿Cómo se escala el sistema?**
+> API y Worker son stateless — se pueden agregar réplicas. La cola PostgreSQL con `SKIP LOCKED` garantiza que múltiples workers no procesan el mismo job. El único estado compartido es la BD.
 
-### 8.3 Prueba de volumetría → ver Grafana en vivo
+**¿Por qué pgvector y no Elasticsearch o Pinecone?**
+> ADR-07: evitar una dependencia externa adicional. PostgreSQL ya es el sistema de registro — agregar pgvector añade búsqueda vectorial sin nuevo servicio. Con `EMBEDDING_PROVIDER=openai` la calidad es comparable.
 
-**Qué hacer:**
-```bash
-make load   # catálogo 50 VUs + inscripción 20 VUs durante 1 min
-```
+**¿Cómo funciona el patrón Observer en las inscripciones?**
+> `EnrollmentService.register()` publica un evento de dominio. Los handlers suscritos reaccionan: `NotificationEnqueueHandler` encola el correo, `CapacityMetricHandler` actualiza la métrica, `AuditHandler` registra la acción. Agregar un nuevo efecto = agregar un handler, sin tocar el servicio.
 
-**Qué mirar simultáneamente en Grafana:**
-- **Panel Rate** → sube a ~50-100 req/s en `GET /events`.
-- **Panel Duration p95** → se mantiene ≤ 500 ms para catálogo y ≤ 2 s para inscripción (SLO en verde).
-- **Panel Errors** → debe mantenerse en 0% (ningún 5xx).
-- **Panel `enrollment_queue_size`** → sube durante la carga (certificados encolados) y el worker los va procesando.
-- **Loki** → `{service="pgea-api"} | json | duration_ms > 300` → filtra solo requests lentos en tiempo real.
+**¿Cómo demuestran la modificabilidad en vivo?**
+> Cambiar `EMAIL_PROVIDER=mock` a `EMAIL_PROVIDER=smtp` en `.env` y `docker compose up -d api worker` — el Factory Method crea el adaptador correcto. El servicio de notificaciones no cambia una línea (§3.6).
 
-> *"El sistema cumple el SLO bajo carga nominal. Ahora vamos a cuadruplicarla."*
+**¿Qué garantiza la auditoría inmutable?**
+> Un trigger de PostgreSQL bloquea `UPDATE` y `DELETE` sobre `audit_log` — aplica incluso al usuario dueño de la BD, no solo a la aplicación. Demostrable en vivo con `DELETE FROM audit_log` → `ERROR 42501` (§3.4).
 
-```bash
-make load-stress   # spike 200 VUs + stress mixto 100 VUs
-```
-- **Panel Rate** → sube bruscamente a 200+ req/s.
-- **Panel Duration** → p95 sube pero sin llegar a timeout.
-- **Panel Errors** → sigue en 0% — degradación elegante, no caída.
+**¿Cómo se correlacionan logs, métricas y trazas?**
+> Cada request genera un `trace_id` W3C. El middleware lo inyecta en el log JSON, en la cabecera `X-Trace-Id` de la respuesta, y en el span de OpenTelemetry. Con ese ID navegas de Loki a Tempo en un clic (§5.2, §8.1).
 
----
-
-### 8.4 Caída de la BD → ver degradación en health check y Grafana
-
-**Qué hacer:**
-```bash
-docker compose stop postgres
-curl http://localhost:8080/api/health/ready
-```
-
-**Qué mirar:**
-- **Health check** → responde `{"status": "degraded", "checks": {"database": "error"}}` con HTTP 503.
-- **Grafana dashboard** → panel Errors sube (503 en `/health/ready`).
-- **Loki** → `{service="pgea-api"} | json | level="error"` → aparecen los errores de conexión a PostgreSQL con stack trace y `trace_id`.
-- **Prometheus** → alerta `DatabaseDown` se activa (si está configurada).
-
-```bash
-docker compose start postgres
-# En 10-15s vuelve a "ready"
-```
-- **Health check** → vuelve a `{"status": "ready"}`.
-- **Grafana** → los errores desaparecen, Rate vuelve a 0.
-
-> *"El sistema detecta la caída, la reporta en el health check y se recupera automáticamente — sin intervención manual (`restart: always`, ADR-08)."*
-
----
-
-### 8.5 RBAC: acceso denegado → ver auditoría y log
-
-**Qué hacer:**
-1. Loguéate como `asistente1@javeriana.edu.co`.
-2. Intenta acceder a `/admin` en la SPA o directamente en Swagger: `GET /admin/dashboard` con el token del asistente.
-
-**Qué mirar:**
-- **Loki** → `{service="pgea-api"} |= "forbidden"` → log `WARNING` con `user_id`, `role=attendee`, `route=/admin/dashboard`.
-- **Prometheus** → `http_requests_total{status="403"}` incrementa.
-- **SPA como admin** → Administración → Auditoría → aparece la entrada `access_denied` con el `trace_id` del intento.
-- **Tempo** → la traza muestra que el request terminó en el middleware de RBAC antes de llegar al servicio de negocio.
-
-> *"El rechazo no solo devuelve 403 — queda auditado con actor, recurso y traza. Eso es lo que diferencia seguridad real de seguridad cosmética."*
-
----
-
-### 8.6 Directamente en Swagger → ver efecto en Grafana y Loki
-
-**Qué hacer:**
-1. Abre http://localhost:8000/docs (o el de stage/prod).
-2. Autentícate con `POST /auth/login` → copia el `access_token`.
-3. Ejecuta `GET /events` varias veces seguidas.
-4. Ejecuta `GET /search?q=inteligencia+artificial&semantic=true`.
-5. Ejecuta `POST /enrollments/{event_id}/register`.
-
-**Qué mirar:**
-- **Grafana dashboard** → cada request en Swagger aparece en el panel Rate en tiempo real.
-- **Loki** → `{service="pgea-api"}` → cada llamada genera un log JSON con método, ruta, status y duración.
-- **Tempo** → cada request tiene su propia traza navegable.
-- **Prometheus** → `http_requests_total` y `http_request_duration_seconds` se actualizan por endpoint.
-
-> *"Swagger no es solo documentación — es una herramienta de prueba que alimenta el mismo pipeline de observabilidad que el frontend."*
-
----
-
-### 8.7 Generación de certificado → ver el worker en acción
-
-**Qué hacer:**
-1. Completa el flujo: inscripción → asistencia → solicitar certificado.
-2. En otra terminal, corre `make logs` o:
-```bash
-docker compose logs -f worker
-```
-
-**Qué mirar:**
-- **Logs del worker** → aparece `INFO: Procesando job certificate_generation — enrollment_id=…` y luego `INFO: Certificado generado en Xms`.
-- **Loki** → `{service="pgea-worker"}` → los mismos logs estructurados del worker.
-- **Grafana** → panel `certificate_generated_total` sube en 1 · panel `enrollment_queue_size` baja (job procesado).
-- **Tempo** → la traza del `POST /certificates/request` muestra el span de encolado; el worker genera su propia traza con el span de generación del PDF.
-
-> *"El API responde inmediatamente al encolar. El worker procesa en segundo plano. Ambos son trazables por separado pero correlacionados por el `enrollment_id`."*
-
----
-
-### 8.8 Búsqueda semántica → comparar con y sin semántica en Swagger
-
-**Qué hacer en Swagger (`/docs`):**
-```
-GET /search?q=ia&semantic=false   → 0 resultados (búsqueda textual exacta)
-GET /search?q=ia&semantic=true    → 4 resultados (mapa curado: IA, Deep Learning, NLP, pgvector)
-GET /search?q=medicina&semantic=true → eventos de Telemedicina y Bioética
-```
-
-**Qué mirar:**
-- **Loki** → `{service="pgea-api"} |= "/search"` → el log incluye `semantic=true`, `strategy=curated`, `results=4`.
-- **Grafana** → el panel Rate muestra los requests a `/search` diferenciados.
-- **Tempo** → la traza de búsqueda semántica tiene un span adicional `curated_search.match` que no aparece en la textual.
-
-> *"La diferencia entre búsqueda textual y semántica es visible no solo en los resultados sino en la traza — el span `curated_search.match` solo aparece cuando se activa la semántica."*
-
----
-
-### 8.9 CI/CD en vivo → push y ver el deploy en GitHub Actions
-
-**Qué hacer:**
-```bash
-git checkout stage
-git commit --allow-empty -m "chore: demo CI/CD en vivo"
-git push origin stage
-```
-
-**Qué mirar:**
-- **GitHub Actions** → aparece el workflow CI corriendo: lint → tests → build → push a GHCR.
-- **GitHub Actions** → Deploy Stage empieza cuando CI termina: SSH → pull → up -d → migraciones → health check.
-- **Health check stage** → `curl http://13.220.166.163:8080/api/health/ready` → responde `ready` al finalizar el deploy.
-- **Grafana stage** → el panel muestra el restart del contenedor (breve caída de métricas y recuperación).
-
-Luego promueve a prod:
-```bash
-git checkout main && git merge stage --no-edit && git push origin main
-```
-- **Deploy Prod** → mismo flujo pero sobre `44.192.12.194`.
-- **Health check prod** → `curl http://44.192.12.194:8080/api/health/ready`.
-
-> *"El código pasa por lint, type-check, tests con ≥70% de cobertura y smoke test de Locust antes de llegar a producción. Todo automático desde un `git push`."*
+**¿Cumplen los SLOs?**
+> Sí: catálogo p95 ≤ 500 ms a 50 VUs y inscripción p95 ≤ 2 s a 20 VUs. Los reportes HTML de Locust lo evidencian. A 200 VUs (4×) hay degradación elegante sin errores (§4).
 
 ---
 
@@ -679,4 +607,5 @@ git checkout main && git merge stage --no-edit && git push origin main
 | Exportar calendario .ics (§3.7) | RF-08 |
 | Volumetría Locust — 4 escenarios (§4) | RNF-06/07/08/17/18 |
 | Observabilidad RED + trazas correlacionadas (§5) | RNF-01/02/03/04/05/09, RN-10, CU-06 |
-| CI/CD commit vacío end-to-end (§6) | ADR-08, ADR-11 |
+| Escenarios integración herramientas (§8) | RNF-01/02/03/04/05, CU-06 |
+| CI/CD commit vacío end-to-end (§6, §8.9) | ADR-08, ADR-11 |

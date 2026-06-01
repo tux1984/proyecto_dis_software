@@ -37,13 +37,24 @@ make up                       # 2) construye y levanta TODO el stack (~1 min)
 make seed                     # 3) puebla datos sintéticos (usuarios, eventos con embeddings, inscripciones…)
 ```
 
+**Accesos locales:**
+
 | Servicio | URL | Notas |
 |---|---|---|
 | **SPA (Web App)** | http://localhost:8080 | Nginx sirve la SPA y proxya `/api` |
 | **API (OpenAPI/Swagger)** | http://localhost:8000/docs | contrato interactivo |
+| **API (ReDoc)** | http://localhost:8000/redoc | documentación navegable |
 | **Grafana** | http://localhost:3000 | admin/admin · dashboard *PGEA — RED + SLO* |
 | **Prometheus** | http://localhost:9090 | targets: api + worker |
-| **Tempo** | http://localhost:3200 | trazas (consultadas desde Grafana) |
+| **Tempo** | http://localhost:3200 | trazas (consultadas desde Grafana → Explore) |
+| **Health ready** | http://localhost:8080/api/health/ready | BD + cola + adaptadores |
+
+**Accesos AWS Lightsail:**
+
+| Ambiente | Frontend | API / Swagger | Grafana |
+|---|---|---|---|
+| **Stage** | http://13.220.166.163:8080 | http://13.220.166.163:8000/docs | http://13.220.166.163:3000 |
+| **Prod** | http://44.192.12.194:8080 | http://44.192.12.194:8000/docs | Túnel SSH (ver GUION_DEMO.md) |
 
 Cuentas sembradas (login SSO = el correo institucional): `admin@`, `organizador1@`, `asistente1@`, `ponente1@` `javeriana.edu.co`.
 
@@ -52,6 +63,14 @@ make test     # suite pytest con cobertura (gate >=70% en módulos críticos)
 make load     # pruebas de carga Locust (reportes HTML en backend/tests/load/reports/)
 make logs     # logs JSON estructurados de api + worker
 make down     # detiene (conserva datos);   make clean  borra volúmenes
+```
+
+**Verificación rápida de que todo está ok:**
+
+```bash
+make ps                                      # todos los contenedores healthy
+curl http://localhost:8080/api/health/ready  # -> {"status":"ready","env":"dev"}
+curl "http://localhost:8000/search?q=ia&semantic=true"  # -> 4 eventos de IA
 ```
 
 ---
